@@ -2,28 +2,35 @@ package main
 
 import "core:fmt"
 import "core:math/linalg"
+import "core:math"
 import rl "vendor:raylib"
 
 WINDOW_WIDTH :: 1280
 WINDOW_HEIGHT :: 720
 
-RESX :: 160
-RESY :: 90
-SIM_TICKS :: 60
+RESX :: 320
+RESY :: 180
+
+GRAVITY :: 3000.0
+SPREAD_FACTOR :: 5
+
+SIM_TICKS :: 120
 SIM_TICK_TIME :: (1.0 / SIM_TICKS)
 
 COLOR_BG :: rl.Color{0x18, 0x18, 0x18, 0xFF}
 
-ParticleType :: enum(u32) {
+ParticleType :: enum(u8) {
     NONE,
     SAND,
     WATER,
+    SMOKE,
 }
 
 Particle :: struct {
     type: ParticleType,
+    free_particle: bool,
+    velocity: rl.Vector2,
     life_time: f32,
-    was_updated: bool
 }
 
 EngineState :: struct {
@@ -36,6 +43,7 @@ particle_colors := [ParticleType]rl.Color {
     .NONE = COLOR_BG,
     .SAND = rl.YELLOW,
     .WATER = rl.BLUE,
+    .SMOKE = rl.GRAY,
 }
 
 // global state
@@ -43,15 +51,27 @@ state: EngineState
 particles: [RESY][RESX]Particle
 simulation_image: rl.Image = rl.GenImageColor(RESX, RESY, COLOR_BG)
 
-can_move_to_cell :: proc(p: Particle, row, col: i32) -> bool {
+in_bounds :: proc(row, col: i32) -> bool {
     if !(row >= 0 && row < RESY) do return false
     if !(col >= 0 && col < RESX) do return false
-    if p.type == .SAND && particles[row][col].type == .WATER {
-        return true
-    }
-    if particles[row][col].type != .NONE do return false
-
     return true
+}
+
+can_move_to_cell :: proc(row, col: i32, t: ParticleType) -> bool {
+    if !in_bounds(row, col) do return false
+    switch t {
+    case .NONE: return true
+    case .WATER: {
+        if particles[row][col].type == .NONE do return true
+    }
+    case .SAND: {
+        if particles[row][col].type == .NONE do return true
+        if particles[row][col].type == .WATER do return true
+    }
+    case .SMOKE:
+    }
+
+    return false
 }
 
 set_particle :: proc(row, col: i32, t: ParticleType) {
@@ -59,64 +79,67 @@ set_particle :: proc(row, col: i32, t: ParticleType) {
     rl.ImageDrawPixel(&simulation_image, col, row, particle_colors[t])
 }
 
-// move the given particle by dr, dcmove_particle :: proc(p: Particle, row, col, dr, dc: i32) -> Particle {
-move_particle :: proc(p: Particle, row, col, dr, dc: i32) {
-    new_row, new_col := row + dr, col + dc
-    replaced := particles[new_row][new_col]
-    particles[new_row][new_col] = p
-    rl.ImageDrawPixel(&simulation_image, i32(new_col), i32(new_row), particle_colors[p.type])
-    particles[row + dr][col + dc].was_updated = true
+// move the given particle
+move_particle :: proc(p: Particle, row, col: i32) {
+    particles[row][col] = p
+    rl.ImageDrawPixel(&simulation_image, i32(col), i32(row), particle_colors[p.type])
 } 
 
-update_sand :: proc(p: Particle, row, col: i32) {
-    replaced: Particle
-    if can_move_to_cell(p, row + 1, col) {
-        replaced = particles[row + 1][col]
-        move_particle(p, row, col, 1, 0)
-    } else if can_move_to_cell(p, row + 1, col + 1) {
-        replaced = particles[row + 1][col + 1]
-        move_particle(p, row, col, 1, 1)
-    } else if can_move_to_cell(p, row + 1, col - 1) {
-        replaced = particles[row + 1][col - 1]
-        move_particle(p, row, col, 1, -1)
-    } else do return
-
-    set_particle(row, col, .NONE)
-}
-
-update_water :: proc(p: Particle, row, col: i32) {
-    if can_move_to_cell(p, row + 1, col) {
-        move_particle(p, row, col, 1, 0)
-    } else if can_move_to_cell(p, row + 1, col + 1) {
-        move_particle(p, row, col, 1, 1)
-    } else if can_move_to_cell(p, row + 1, col - 1) {
-        move_particle(p, row, col, 1, -1)
-    } else if can_move_to_cell(p, row, col + 1) {
-        move_particle(p, row, col, 0, 1)
-    } else if can_move_to_cell(p, row, col - 1) {
-        move_particle(p, row, col, 0, -1)
-    } else do return
-
-    set_particle(row, col, .NONE)
-
-}
-
-update_particles :: proc() {
-    for row in 0..<RESY {
-        for col in 0..<RESX {
-            p := &particles[row][col]
-            if p.was_updated do continue
-            switch p.type {
-                case .NONE: continue
-                case .SAND: update_sand(p^, i32(row), i32(col))
-                case .WATER: update_water(p^, i32(row), i32(col))
+update_sand :: proc(p: Particle, row, col: i32, dt: f32) {
+    p := p
+    if can_move_to_cell(row + 1, col, p.type) {
+        p.velocity.y += GRAVITY * dt
+        dest_row := row + i32(p.velocity.y * dt)
+        dest_row = dest_row == row ? dest_row + 1 : dest_row
+        for r in row+2..=dest_row {
+            if !can_move_to_cell(r, col, p.type) {
+                dest_row = r - 1
+                break
             }
         }
+        move_particle(p, dest_row, col)
+        set_particle(row, col, .NONE)
+        return
+    } else if can_move_to_cell(row + 1, col + 1, p.type) {
+        move_particle(p, row + 1, col + 1)
+    } else if can_move_to_cell(row + 1, col - 1, p.type) {
+        move_particle(p, row + 1, col - 1)
+    } else {
+        p.velocity = rl.Vector2(0)
+        return
     }
 
-    // reset particles updated state for this frame
-    for &row in particles {
-        for &p in row do p.was_updated = false
+    set_particle(row, col, .NONE)
+}
+
+update_liquid :: proc(p: Particle, row, col: i32, dt: f32) {
+    if can_move_to_cell(row + 1, col, p.type) {
+        move_particle(p, row + 1, col)
+    } else if can_move_to_cell(row + 1, col + 1, p.type) {
+        move_particle(p, row + 1, col + 1)
+    } else if can_move_to_cell(row + 1, col - 1, p.type) {
+        move_particle(p, row + 1, col - 1)
+    } else if can_move_to_cell(row, col + 1, p.type) {
+        move_particle(p, row, col + 1)
+    } else if can_move_to_cell(row, col - 1, p.type) {
+        move_particle(p, row, col - 1)
+    } else do return
+
+    set_particle(row, col, .NONE)
+
+}
+
+update_particles :: proc(dt: f32) {
+    for row := RESY - 1; row >= 0; row -= 1 {
+        for col in 0..<RESX {
+            p := &particles[row][col]
+            switch p.type {
+                case .NONE: continue
+                case .SAND: update_sand(p^, i32(row), i32(col), dt)
+                case .WATER: update_liquid(p^, i32(row), i32(col), dt)
+                case .SMOKE: continue
+            }
+        }
     }
 
 }
@@ -130,7 +153,7 @@ handle_particle_interaction :: proc(selected_type: ParticleType) {
     mouse_y = min(RESY - 1, max(0, mouse_y))
 
     // add particles
-    DRAW_RADIUS :: 5
+    DRAW_RADIUS :: 2
     if rl.IsMouseButtonDown(.LEFT) {
         for y := 0; y < 2*DRAW_RADIUS; y += 1 {
             py := mouse_y - DRAW_RADIUS + y
@@ -202,7 +225,7 @@ main :: proc() {
 
         // run the simulation at set update rate
         if time - state.last_tick >= SIM_TICK_TIME {
-            update_particles()
+            update_particles(dt)
             state.last_tick = time
         }
 
