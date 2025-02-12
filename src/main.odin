@@ -85,11 +85,11 @@ move_particle :: proc(p: Particle, row, col: i32) {
     rl.ImageDrawPixel(&simulation_image, i32(col), i32(row), particle_colors[p.type])
 } 
 
-update_sand :: proc(p: Particle, row, col: i32, dt: f32) {
+update_sand :: proc(p: Particle, row, col: i32) {
     p := p
     if can_move_to_cell(row + 1, col, p.type) {
-        p.velocity.y += GRAVITY * dt
-        dest_row := row + i32(p.velocity.y * dt)
+        p.velocity.y += GRAVITY * SIM_TICK_TIME
+        dest_row := row + i32(p.velocity.y * SIM_TICK_TIME)
         dest_row = dest_row == row ? dest_row + 1 : dest_row
         for r in row+2..=dest_row {
             if !can_move_to_cell(r, col, p.type) {
@@ -112,31 +112,55 @@ update_sand :: proc(p: Particle, row, col: i32, dt: f32) {
     set_particle(row, col, .NONE)
 }
 
-update_liquid :: proc(p: Particle, row, col: i32, dt: f32) {
+update_liquid :: proc(p: Particle, row, col: i32) {
+    p := p
     if can_move_to_cell(row + 1, col, p.type) {
-        move_particle(p, row + 1, col)
+        p.velocity.y += GRAVITY * SIM_TICK_TIME
+        dest_row := row + i32(p.velocity.y * SIM_TICK_TIME)
+        dest_row = dest_row == row ? dest_row + 1 : dest_row
+        for r in row+2..=dest_row {
+            if !can_move_to_cell(r, col, p.type) {
+                dest_row = r - 1
+                break
+            }
+        }
+        move_particle(p, dest_row, col)
     } else if can_move_to_cell(row + 1, col + 1, p.type) {
         move_particle(p, row + 1, col + 1)
     } else if can_move_to_cell(row + 1, col - 1, p.type) {
         move_particle(p, row + 1, col - 1)
     } else if can_move_to_cell(row, col + 1, p.type) {
-        move_particle(p, row, col + 1)
+        dest_col := col + SPREAD_FACTOR
+        for c in col+1..=dest_col {
+            if !can_move_to_cell(row, c, p.type) {
+                dest_col = c - 1
+                break
+            }
+        }
+        move_particle(p, row, dest_col)
     } else if can_move_to_cell(row, col - 1, p.type) {
-        move_particle(p, row, col - 1)
+        dest_col := col - SPREAD_FACTOR
+        for c := col; c >= dest_col; c -= 1 {
+            if !can_move_to_cell(row, c, p.type) {
+                dest_col = c - 1
+                break
+            }
+        }
+        move_particle(p, row, dest_col)
     } else do return
 
     set_particle(row, col, .NONE)
 
 }
 
-update_particles :: proc(dt: f32) {
+update_particles :: proc() {
     for row := RESY - 1; row >= 0; row -= 1 {
         for col in 0..<RESX {
             p := &particles[row][col]
             switch p.type {
                 case .NONE: continue
-                case .SAND: update_sand(p^, i32(row), i32(col), dt)
-                case .WATER: update_liquid(p^, i32(row), i32(col), dt)
+                case .SAND: update_sand(p^, i32(row), i32(col))
+                case .WATER: update_liquid(p^, i32(row), i32(col))
                 case .SMOKE: continue
             }
         }
@@ -225,7 +249,7 @@ main :: proc() {
 
         // run the simulation at set update rate
         if time - state.last_tick >= SIM_TICK_TIME {
-            update_particles(dt)
+            update_particles()
             state.last_tick = time
         }
 
